@@ -123,8 +123,10 @@ def main():
     ctk.set_default_color_theme("blue")
 
     app = TkinterDnD.Tk()
-    app.title("Organizador de Integra\u00e7\u00e3o")
+    app.title("Organizer")
+    app.iconbitmap("C:\\Users\\bruno.lima\\Downloads\\favicon.ico")  # <- Aqui adicionamos o ícone
     app.geometry("600x400")
+
 
     if ctk.get_appearance_mode() == "Dark":
         app.configure(bg=ctk.ThemeManager.theme["CTkFrame"]["fg_color"][1])
