@@ -6,7 +6,6 @@ DefaultGroupName=OrganizeUP
 OutputDir=.\Output
 OutputBaseFilename=OrganizeUP_Installer
 SetupIconFile="favicon.ico"
-LicenseFile="license.txt"
 
 [Files]
 Source: "dist\OrganizeUP.exe"; DestDir: "{app}"; Flags: ignoreversion

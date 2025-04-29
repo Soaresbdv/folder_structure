@@ -1,5 +1,3 @@
-; OrganizeUPInstaller.iss
-
 [Setup]
 AppName=OrganizeUP
 AppVersion=1.0
