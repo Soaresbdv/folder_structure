@@ -1,27 +1,19 @@
 import os
 import shutil
 import zipfile
+import sys
+import time
 import customtkinter as ctk
 from tkinter import filedialog
 from tkinterdnd2 import DND_FILES, TkinterDnD
-import time
-
-def get_downloads_folder():
-    return os.path.join(os.path.expanduser("~"), "Downloads")
-
-def extract_zip(zip_path, extract_to):
-    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-        zip_ref.extractall(extract_to)
 
 def find_cnpj_in_xml(xml_folder, cnpj):
-    for root, dirs, files in os.walk(xml_folder):
+    for root, _, files in os.walk(xml_folder):
         for file in files:
             if file.lower().endswith('.xml'):
-                file_path = os.path.join(root, file)
                 try:
-                    with open(file_path, 'r', encoding='utf-8') as f:
-                        content = f.read()
-                        if cnpj in content:
+                    with open(os.path.join(root, file), 'r', encoding='utf-8') as f:
+                        if cnpj in f.read():
                             return True
                 except:
                     continue
@@ -34,57 +26,64 @@ def move_txt_to_company_folder(txt_path, company_folders, cnpj):
             return True
     return False
 
-def reorganize_folders(base_path, progress_callback, app):
-    company_folders = []
-    txt_files = []
+def extract_zip(zip_path, extract_to):
+    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+        zip_ref.extractall(extract_to)
 
-    for item in os.listdir(base_path):
-        item_path = os.path.join(base_path, item)
-        if os.path.isdir(item_path):
-            company_folders.append(item_path)
-        elif item.lower().endswith('.txt'):
-            txt_files.append(item_path)
+def is_structure_valid(extracted_path):
+    folders = [os.path.join(extracted_path, f) for f in os.listdir(extracted_path) if os.path.isdir(os.path.join(extracted_path, f))]
+    txt_files = [f for f in os.listdir(extracted_path) if f.lower().endswith('.txt')]
+
+    if not folders or not txt_files:
+        return False
+
+    for txt in txt_files:
+        try:
+            cnpj = txt.split('-')[2]
+        except IndexError:
+            return False
+
+        if not any(find_cnpj_in_xml(folder, cnpj) for folder in folders):
+            print(f"[ERRO] CNPJ do arquivo {txt} não foi encontrado em nenhuma pasta.")
+            return False
+
+    return True
+
+def reorganize_folders(base_path, progress_callback, app):
+    company_folders = [os.path.join(base_path, f) for f in os.listdir(base_path) if os.path.isdir(os.path.join(base_path, f))]
+    txt_files = [os.path.join(base_path, f) for f in os.listdir(base_path) if f.lower().endswith('.txt')]
 
     total_steps = len(company_folders) + len(txt_files)
     current_step = 0
 
     for company_folder in company_folders:
         cancelados_folder = os.path.join(company_folder, "Cancelados")
-
         if os.path.exists(cancelados_folder):
             for file in os.listdir(cancelados_folder):
-                src = os.path.join(cancelados_folder, file)
-                dst = os.path.join(company_folder, file)
-                shutil.move(src, dst)
+                shutil.move(os.path.join(cancelados_folder, file), os.path.join(company_folder, file))
             shutil.rmtree(cancelados_folder)
-
         current_step += 1
         progress_callback(current_step / total_steps)
         app.update()
 
     for txt_file in txt_files:
         cnpj = os.path.basename(txt_file).split('-')[2]
-        found = move_txt_to_company_folder(txt_file, company_folders, cnpj)
-        if not found:
-            print(f"Aviso: CNPJ {cnpj} do arquivo {os.path.basename(txt_file)} nao encontrado em nenhum XML.")
-
+        move_txt_to_company_folder(txt_file, company_folders, cnpj)
         current_step += 1
         progress_callback(current_step / total_steps)
         app.update()
 
 def create_final_zip(base_folder, output_zip_path):
     with zipfile.ZipFile(output_zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-        for root, dirs, files in os.walk(base_folder):
+        for root, _, files in os.walk(base_folder):
             for file in files:
-                file_path = os.path.join(root, file)
-                arcname = os.path.relpath(file_path, os.path.dirname(base_folder))
-                zipf.write(file_path, arcname)
+                zipf.write(os.path.join(root, file), os.path.relpath(os.path.join(root, file), os.path.dirname(base_folder)))
+
+def reset_message(app, update_message_callback, text="Arraste e solte o arquivo aqui. Ou clique pra encontrar"):
+    app.after(3000, lambda: update_message_callback(text))
 
 def process_zip(zip_file, progress_callback, update_message_callback, app):
-    if not zip_file:
-        return
-
-    downloads_folder = get_downloads_folder()
+    downloads_folder = os.path.join(os.path.expanduser("~"), "Downloads")
     temp_extract_path = os.path.join(downloads_folder, "temp_extract")
 
     if os.path.exists(temp_extract_path):
@@ -92,29 +91,36 @@ def process_zip(zip_file, progress_callback, update_message_callback, app):
     os.makedirs(temp_extract_path)
 
     update_message_callback("Extraindo arquivo...")
-    extract_zip(zip_file, temp_extract_path)
+    try:
+        extract_zip(zip_file, temp_extract_path)
+    except zipfile.BadZipFile:
+        update_message_callback("Tipo de arquivo incorreto.", color=("#8B0000", "#FF7F7F"))
+        progress_callback(0)
+        reset_message(app, update_message_callback)
+        return
+
+    if not is_structure_valid(temp_extract_path):
+        update_message_callback("Estrutura de arquivo incorreta!", color=("#8B0000", "#FF7F7F"))
+        progress_callback(0)
+        shutil.rmtree(temp_extract_path)
+        reset_message(app, update_message_callback)
+        return
 
     update_message_callback("Organizando pastas...")
     reorganize_folders(temp_extract_path, progress_callback, app)
 
     zip_name_parts = os.path.basename(zip_file).replace('.zip', '').split('-')
-    if len(zip_name_parts) >= 5:
-        cnpj = zip_name_parts[2]
-        ano = zip_name_parts[-1]
-        final_zip_name = f"{cnpj}-INTEGRACAO-{ano}.zip"
-    else:
-        final_zip_name = "resultado_integracao.zip"
-
+    final_zip_name = f"{zip_name_parts[2]}-INTEGRACAO-{zip_name_parts[-1]}.zip" if len(zip_name_parts) >= 5 else "resultado_integracao.zip"
     final_zip_path = os.path.join(downloads_folder, final_zip_name)
 
     update_message_callback("Compactando resultado...")
     create_final_zip(temp_extract_path, final_zip_path)
-
     shutil.rmtree(temp_extract_path)
 
-    update_message_callback("Arquivo gerado com sucesso!", color="#90EE90")
+    green_color = "#228B22" if ctk.get_appearance_mode() == "Light" else "#90EE90"
+    update_message_callback("Arquivo gerado com sucesso!", color=green_color)
     progress_callback(0)
-    app.after(3000, lambda: update_message_callback("Arraste e solte o arquivo ZIP aqui"))
+    reset_message(app, update_message_callback)
 
     print(f"Arquivo final gerado: {final_zip_path}")
 
@@ -123,29 +129,23 @@ def main():
     ctk.set_default_color_theme("blue")
 
     app = TkinterDnD.Tk()
-    app.title("Organizer")
-    app.iconbitmap("C:\\Users\\bruno.lima\\Downloads\\favicon.ico")  # <- Aqui adicionamos o ícone
+    app.title("OrganizeUP")
+
+    base_path = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
+    icon_path = os.path.join(base_path, "favicon.ico")
+    app.iconbitmap(icon_path)
     app.geometry("600x400")
 
-
-    if ctk.get_appearance_mode() == "Dark":
-        app.configure(bg=ctk.ThemeManager.theme["CTkFrame"]["fg_color"][1])
-    else:
-        app.configure(bg=ctk.ThemeManager.theme["CTkFrame"]["fg_color"][0])
+    bg_color = ctk.ThemeManager.theme["CTkFrame"]["fg_color"][1] if ctk.get_appearance_mode() == "Dark" else ctk.ThemeManager.theme["CTkFrame"]["fg_color"][0]
+    app.configure(bg=bg_color)
 
     frame = ctk.CTkFrame(app, corner_radius=15)
     frame.pack(expand=True, fill="both", padx=0, pady=0)
 
     def toggle_mode():
-        current_mode = ctk.get_appearance_mode()
-        if current_mode == "Dark":
-            ctk.set_appearance_mode("Light")
-            mode_switch.configure(text="Dark Mode")
-            app.configure(bg=ctk.ThemeManager.theme["CTkFrame"]["fg_color"][0])
-        else:
-            ctk.set_appearance_mode("Dark")
-            mode_switch.configure(text="Light Mode")
-            app.configure(bg=ctk.ThemeManager.theme["CTkFrame"]["fg_color"][1])
+        ctk.set_appearance_mode("Light" if ctk.get_appearance_mode() == "Dark" else "Dark")
+        mode_switch.configure(text="Dark Mode" if ctk.get_appearance_mode() == "Light" else "Light Mode")
+        app.configure(bg=ctk.ThemeManager.theme["CTkFrame"]["fg_color"][0 if ctk.get_appearance_mode() == "Light" else 1])
 
     mode_switch = ctk.CTkSwitch(frame, text="Dark Mode", command=toggle_mode, font=("Arial", 12))
     mode_switch.place(relx=0.05, rely=0.05)
@@ -153,7 +153,7 @@ def main():
     drop_area = ctk.CTkFrame(frame, width=400, height=200, corner_radius=20)
     drop_area.place(relx=0.5, rely=0.4, anchor=ctk.CENTER)
 
-    drop_label = ctk.CTkLabel(drop_area, text="Arraste e solte o arquivo ZIP aqui", font=("Arial", 16))
+    drop_label = ctk.CTkLabel(drop_area, text="Arraste e solte o arquivo aqui. Ou clique pra encontrar", font=("Segoe UI", 13))
     drop_label.place(relx=0.5, rely=0.5, anchor=ctk.CENTER)
 
     progress = ctk.CTkProgressBar(frame, width=300, height=10)
@@ -164,26 +164,38 @@ def main():
         progress.set(value)
 
     def update_message(message, color=None):
-        if color:
-            drop_label.configure(text=message, text_color=color)
+        drop_label.configure(text=message, text_color=color or ("black", "white"))
+
+    def handle_file(file_path):
+        drop_area.configure(fg_color=("#E5E5E5", "#333333"))
+        if file_path.lower().endswith('.zip'):
+            process_zip(file_path, update_progress, update_message, app)
         else:
-            drop_label.configure(text=message, text_color=("black", "white"))
+            update_message("Tipo de arquivo incorreto.", color=("#8B0000", "#FF7F7F"))
+        progress.set(0)
+        reset_message(app, update_message)
+        reset_message(app, update_message)
 
     def on_drop(event):
         file_path = event.data.strip('{}')
-        if file_path.lower().endswith('.zip'):
-            process_zip(file_path, update_progress, update_message, app)
+        handle_file(file_path)
+        drop_area.configure(fg_color=("#F0F0F0", "#2D2D2D"))
 
+    def on_drag_enter(event):
+        drop_area.configure(fg_color=("#D6F5FF", "#2A3D4F"))
+
+    def on_drag_leave(event):
+        drop_area.configure(fg_color=("#F0F0F0", "#2D2D2D"))
+        
     def on_click(event):
-        file_path = filedialog.askopenfilename(
-            title="Selecione o arquivo ZIP",
-            filetypes=[("Arquivos ZIP", "*.zip")]
-        )
+        file_path = filedialog.askopenfilename(title="Selecione o arquivo ZIP", filetypes=[("Arquivos ZIP", "*.zip")])
         if file_path:
-            process_zip(file_path, update_progress, update_message, app)
+            handle_file(file_path)
 
     drop_area.drop_target_register(DND_FILES)
     drop_area.dnd_bind("<<Drop>>", on_drop)
+    drop_area.bind("<Enter>", on_drag_enter)
+    drop_area.bind("<Leave>", on_drag_leave)
     drop_area.bind("<Button-1>", on_click)
     drop_label.bind("<Button-1>", on_click)
 
